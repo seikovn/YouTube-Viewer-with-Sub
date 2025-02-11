@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Viewer với Phụ đề Song ngữ</title>
+    <title>YouTube Viewer với Phụ đề và Transcript</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -72,7 +72,6 @@
             font-size: 18px;
             font-weight: bold;
             text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
-            margin-bottom: 5px;
         }
         .translated-text {
             color: #ffd700;
@@ -80,8 +79,48 @@
             margin-top: 5px;
             text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
         }
-        #controls {
+        #transcript-container {
             margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            background-color: #fff;
+        }
+        .transcript-line {
+            display: flex;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .transcript-line:hover {
+            background-color: #f5f5f5;
+        }
+        .transcript-line.active {
+            background-color: #e3f2fd;
+        }
+        .timestamp {
+            min-width: 80px;
+            color: #666;
+            font-size: 14px;
+            padding-right: 10px;
+        }
+        .transcript-text {
+            flex: 1;
+        }
+        .transcript-original {
+            font-weight: 500;
+            margin-bottom: 5px;
+        }
+        .transcript-translation {
+            color: #666;
+            font-size: 14px;
+            font-style: italic;
+        }
+        #controls {
+            margin: 20px 0;
             display: flex;
             gap: 10px;
             justify-content: center;
@@ -97,26 +136,27 @@
         .control-button:hover {
             background-color: #555;
         }
-        #status {
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: 5px;
-            text-align: center;
-            display: none;
+        .tabs {
+            display: flex;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #ddd;
         }
-        .error {
-            background-color: #ffebee;
-            color: #c62828;
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            margin-bottom: -1px;
         }
-        .success {
-            background-color: #e8f5e9;
-            color: #2e7d32;
+        .tab.active {
+            border: 1px solid #ddd;
+            border-bottom-color: #fff;
+            border-radius: 5px 5px 0 0;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>YouTube Viewer với Phụ đề Song ngữ</h1>
+        <h1>YouTube Viewer với Phụ đề và Transcript</h1>
         <div class="input-group">
             <input type="text" id="video-url" placeholder="Nhập URL video YouTube">
             <select id="source-language">
@@ -133,30 +173,39 @@
             </select>
             <button onclick="loadVideo()">Xem Video</button>
         </div>
-        <div id="status"></div>
+
         <div id="player"></div>
+        
         <div id="subtitles-container">
             <div class="subtitle-line">
                 <div class="original-text" id="original-subtitle"></div>
                 <div class="translated-text" id="translated-subtitle"></div>
             </div>
         </div>
+
         <div id="controls">
             <button class="control-button" onclick="adjustTiming(-0.5)">-0.5s</button>
             <button class="control-button" onclick="adjustTiming(0.5)">+0.5s</button>
             <button class="control-button" onclick="toggleSubtitles()">Ẩn/Hiện phụ đề</button>
             <button class="control-button" onclick="toggleTranslation()">Ẩn/Hiện dịch</button>
         </div>
+
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('transcript')">Transcript</div>
+            <div class="tab" onclick="switchTab('settings')">Cài đặt</div>
+        </div>
+
+        <div id="transcript-container"></div>
     </div>
 
     <script>
         let player;
         let subtitleTracks = [];
+        let translatedTracks = [];
         let currentSubtitleIndex = 0;
         let subtitleOffset = 0;
         let showSubtitles = true;
         let showTranslation = true;
-        let subtitleInterval;
 
         // Load YouTube IFrame API
         const tag = document.createElement('script');
@@ -164,14 +213,10 @@
         const firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
-        function showStatus(message, isError = false) {
-            const status = document.getElementById('status');
-            status.textContent = message;
-            status.style.display = 'block';
-            status.className = isError ? 'error' : 'success';
-            setTimeout(() => {
-                status.style.display = 'none';
-            }, 5000);
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = Math.floor(seconds % 60);
+            return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
         }
 
         async function loadVideo() {
@@ -179,16 +224,10 @@
             const videoId = extractVideoId(videoUrl);
             
             if (!videoId) {
-                showStatus('URL video không hợp lệ!', true);
+                alert('URL video không hợp lệ!');
                 return;
             }
 
-            // Clear existing interval if any
-            if (subtitleInterval) {
-                clearInterval(subtitleInterval);
-            }
-
-            // Create or update player
             if (player) {
                 player.loadVideoById({
                     videoId: videoId,
@@ -210,118 +249,89 @@
                 });
             }
 
-            // Load subtitles using YouTube Data API
+            // Load subtitles
             try {
-                const sourceLang = document.getElementById('source-language').value;
-                await loadSubtitles(videoId, sourceLang);
-                showStatus('Phụ đề đã được tải thành công!');
+                await loadSubtitles(videoId);
+                renderTranscript();
             } catch (error) {
-                showStatus('Không thể tải phụ đề. Hãy đảm bảo video có phụ đề.', true);
                 console.error('Error loading subtitles:', error);
+                alert('Không thể tải phụ đề. Hãy đảm bảo video có phụ đề.');
             }
         }
 
-        async function loadSubtitles(videoId, lang) {
-            // Using YouTube Data API v3 to get captions
-            const API_KEY = 'YOUR_YOUTUBE_API_KEY'; // Replace with your API key
-            const response = await fetch(`https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${API_KEY}`);
-            const data = await response.json();
+        async function loadSubtitles(videoId) {
+            // Simulated subtitle data - replace with actual API call
+            subtitleTracks = [
+                { start: 0, duration: 5, text: "Hello and welcome to this video" },
+                { start: 5, duration: 5, text: "Today we'll learn something interesting" },
+                // Add more subtitle entries
+            ];
 
-            if (data.items && data.items.length > 0) {
-                const caption = data.items.find(item => item.snippet.language === lang);
-                if (caption) {
-                    const captionResponse = await fetch(`https://www.googleapis.com/youtube/v3/captions/${caption.id}?key=${API_KEY}`);
-                    const captionData = await captionResponse.json();
-                    subtitleTracks = parseCaptions(captionData);
-                    startSubtitleSync();
-                } else {
-                    throw new Error('No captions found for selected language');
-                }
-            } else {
-                throw new Error('No captions available for this video');
-            }
-        }
-
-        function parseCaptions(captionData) {
-            // Parse the caption data into our subtitle format
-            return captionData.items.map(item => ({
-                start: item.start,
-                duration: item.duration,
-                text: item.text
-            }));
-        }
-
-        function startSubtitleSync() {
-            if (subtitleInterval) {
-                clearInterval(subtitleInterval);
-            }
-
-            subtitleInterval = setInterval(() => {
-                if (player && player.getCurrentTime) {
-                    const currentTime = player.getCurrentTime() + subtitleOffset;
-                    updateSubtitles(currentTime);
-                }
-            }, 100);
-        }
-
-        async function updateSubtitles(currentTime) {
-            if (!showSubtitles) {
-                document.getElementById('original-subtitle').textContent = '';
-                document.getElementById('translated-subtitle').textContent = '';
-                return;
-            }
-
-            const currentSubtitle = subtitleTracks.find(subtitle =>
-                currentTime >= subtitle.start &&
-                currentTime <= subtitle.start + subtitle.duration
+            // Translate all subtitles at once
+            translatedTracks = await Promise.all(
+                subtitleTracks.map(async (subtitle) => {
+                    const translation = await translateText(
+                        subtitle.text,
+                        document.getElementById('source-language').value,
+                        document.getElementById('target-language').value
+                    );
+                    return { ...subtitle, translation };
+                })
             );
+        }
 
-            if (currentSubtitle) {
-                document.getElementById('original-subtitle').textContent = currentSubtitle.text;
-                
-                if (showTranslation) {
-                    try {
-                        const translatedText = await translateText(
-                            currentSubtitle.text,
-                            document.getElementById('source-language').value,
-                            document.getElementById('target-language').value
-                        );
-                        document.getElementById('translated-subtitle').textContent = translatedText;
-                    } catch (error) {
-                        console.error('Translation error:', error);
-                    }
+        function renderTranscript() {
+            const container = document.getElementById('transcript-container');
+            container.innerHTML = '';
+
+            translatedTracks.forEach((track, index) => {
+                const div = document.createElement('div');
+                div.className = 'transcript-line';
+                div.innerHTML = `
+                    <div class="timestamp">${formatTime(track.start)}</div>
+                    <div class="transcript-text">
+                        <div class="transcript-original">${track.text}</div>
+                        <div class="transcript-translation">${track.translation}</div>
+                    </div>
+                `;
+                div.onclick = () => seekTo(track.start);
+                container.appendChild(div);
+            });
+        }
+
+        function seekTo(time) {
+            if (player && player.seekTo) {
+                player.seekTo(time);
+                player.playVideo();
+            }
+        }
+
+        function updateActiveTranscript(currentTime) {
+            const lines = document.querySelectorAll('.transcript-line');
+            lines.forEach((line, index) => {
+                const track = translatedTracks[index];
+                if (track && currentTime >= track.start && 
+                    currentTime <= track.start + track.duration) {
+                    line.classList.add('active');
+                    line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else {
+                    line.classList.remove('active');
                 }
-            } else {
-                document.getElementById('original-subtitle').textContent = '';
-                document.getElementById('translated-subtitle').textContent = '';
+            });
+        }
+
+        function onPlayerStateChange(event) {
+            if (event.data === YT.PlayerState.PLAYING) {
+                setInterval(() => {
+                    const currentTime = player.getCurrentTime();
+                    updateActiveTranscript(currentTime);
+                }, 100);
             }
         }
 
         async function translateText(text, sourceLang, targetLang) {
-            // Replace this with actual translation API call
-            const API_KEY = 'YOUR_TRANSLATION_API_KEY'; // Replace with your translation API key
-            const url = `https://translation.googleapis.com/language/translate/v2?key=${API_KEY}`;
-            
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        q: text,
-                        source: sourceLang,
-                        target: targetLang,
-                        format: 'text'
-                    })
-                });
-                
-                const data = await response.json();
-                return data.data.translations[0].translatedText;
-            } catch (error) {
-                console.error('Translation error:', error);
-                return `[Error translating: ${text}]`;
-            }
+            // Simulated translation - replace with actual API call
+            return `[${targetLang}: ${text}]`;
         }
 
         function extractVideoId(url) {
@@ -334,28 +344,30 @@
             event.target.playVideo();
         }
 
-        function onPlayerStateChange(event) {
-            if (event.data === YT.PlayerState.PLAYING) {
-                startSubtitleSync();
-            }
-        }
-
         function adjustTiming(offset) {
             subtitleOffset += offset;
-            showStatus(`Đã điều chỉnh thời gian phụ đề: ${offset > 0 ? '+' : ''}${offset}s`);
         }
 
         function toggleSubtitles() {
             showSubtitles = !showSubtitles;
-            showStatus(showSubtitles ? 'Đã hiện phụ đề' : 'Đã ẩn phụ đề');
+            document.getElementById('subtitles-container').style.display = 
+                showSubtitles ? 'block' : 'none';
         }
 
         function toggleTranslation() {
             showTranslation = !showTranslation;
-            if (!showTranslation) {
-                document.getElementById('translated-subtitle').textContent = '';
-            }
-            showStatus(showTranslation ? 'Đã hiện bản dịch' : 'Đã ẩn bản dịch');
+            document.querySelectorAll('.transcript-translation').forEach(el => {
+                el.style.display = showTranslation ? 'block' : 'none';
+            });
+            document.getElementById('translated-subtitle').style.display = 
+                showTranslation ? 'block' : 'none';
+        }
+
+        function switchTab(tab) {
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            // Add your tab switching logic here
         }
     </script>
 </body>
