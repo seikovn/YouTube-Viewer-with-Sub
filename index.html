@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Viewer với Phụ đề</title>
+    <title>YouTube Viewer với Phụ đề Song ngữ</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -20,9 +20,19 @@
         }
         .input-group {
             margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
         }
         input[type="text"] {
-            width: 70%;
+            flex: 1;
+            min-width: 200px;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        select {
             padding: 10px;
             font-size: 16px;
             border: 1px solid #ddd;
@@ -45,34 +55,93 @@
             aspect-ratio: 16/9;
             margin-bottom: 20px;
         }
-        #subtitle-container {
-            background-color: #f8f8f8;
-            padding: 15px;
+        #subtitles-container {
+            position: relative;
+            background-color: #000;
+            padding: 20px;
             border-radius: 5px;
-            min-height: 100px;
             margin-top: 20px;
+        }
+        .subtitle-line {
+            text-align: center;
+            margin: 10px 0;
+            min-height: 24px;
+        }
+        .original-text {
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        }
+        .translated-text {
+            color: #ffd700;
+            font-size: 16px;
+            margin-top: 5px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+        }
+        #controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+        }
+        .control-button {
+            background-color: #333;
+            color: white;
+            border: none;
+            padding: 5px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .control-button:hover {
+            background-color: #555;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>YouTube Viewer với Phụ đề</h1>
+        <h1>YouTube Viewer với Phụ đề Song ngữ</h1>
         <div class="input-group">
             <input type="text" id="video-url" placeholder="Nhập URL video YouTube">
+            <select id="source-language">
+                <option value="en">Tiếng Anh</option>
+                <option value="ja">Tiếng Nhật</option>
+                <option value="ko">Tiếng Hàn</option>
+                <option value="zh">Tiếng Trung</option>
+            </select>
+            <select id="target-language">
+                <option value="vi">Tiếng Việt</option>
+                <option value="en">Tiếng Anh</option>
+                <option value="ja">Tiếng Nhật</option>
+                <option value="ko">Tiếng Hàn</option>
+            </select>
             <button onclick="loadVideo()">Xem Video</button>
         </div>
         <div id="player"></div>
-        <div id="subtitle-container">
-            <h3>Phụ đề sẽ hiển thị ở đây</h3>
-            <div id="subtitle-text"></div>
+        <div id="subtitles-container">
+            <div class="subtitle-line">
+                <div class="original-text" id="original-subtitle"></div>
+                <div class="translated-text" id="translated-subtitle"></div>
+            </div>
+        </div>
+        <div id="controls">
+            <button class="control-button" onclick="adjustTiming(-0.5)">-0.5s</button>
+            <button class="control-button" onclick="adjustTiming(0.5)">+0.5s</button>
+            <button class="control-button" onclick="toggleSubtitles()">Ẩn/Hiện phụ đề</button>
+            <button class="control-button" onclick="toggleTranslation()">Ẩn/Hiện dịch</button>
         </div>
     </div>
 
     <script src="https://www.youtube.com/iframe_api"></script>
     <script>
         let player;
+        let subtitleTracks = [];
+        let currentSubtitleIndex = 0;
+        let subtitleOffset = 0;
+        let showSubtitles = true;
+        let showTranslation = true;
 
-        function loadVideo() {
+        async function loadVideo() {
             const videoUrl = document.getElementById('video-url').value;
             const videoId = extractVideoId(videoUrl);
             
@@ -85,8 +154,8 @@
                         width: '640',
                         videoId: videoId,
                         playerVars: {
-                            'cc_load_policy': 1,  // Hiển thị phụ đề mặc định
-                            'cc_lang_pref': 'vi'  // Ưu tiên phụ đề tiếng Việt
+                            'cc_load_policy': 1,
+                            'cc_lang_pref': document.getElementById('source-language').value
                         },
                         events: {
                             'onReady': onPlayerReady,
@@ -94,9 +163,84 @@
                         }
                     });
                 }
+                
+                // Load subtitles
+                try {
+                    const response = await fetch(`https://video.google.com/timedtext?lang=${document.getElementById('source-language').value}&v=${videoId}`);
+                    const data = await response.text();
+                    subtitleTracks = parseSubtitles(data);
+                    startSubtitleSync();
+                } catch (error) {
+                    console.error('Error loading subtitles:', error);
+                    alert('Không thể tải phụ đề. Hãy đảm bảo video có phụ đề.');
+                }
             } else {
                 alert('URL video không hợp lệ!');
             }
+        }
+
+        function parseSubtitles(xmlString) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlString, "text/xml");
+            const textTags = xmlDoc.getElementsByTagName('text');
+            
+            return Array.from(textTags).map(text => ({
+                start: parseFloat(text.getAttribute('start')),
+                duration: parseFloat(text.getAttribute('dur')),
+                text: text.textContent
+            }));
+        }
+
+        function startSubtitleSync() {
+            setInterval(() => {
+                if (player && player.getCurrentTime) {
+                    const currentTime = player.getCurrentTime() + subtitleOffset;
+                    updateSubtitles(currentTime);
+                }
+            }, 100);
+        }
+
+        async function updateSubtitles(currentTime) {
+            if (!showSubtitles) {
+                document.getElementById('original-subtitle').textContent = '';
+                document.getElementById('translated-subtitle').textContent = '';
+                return;
+            }
+
+            const currentSubtitle = subtitleTracks.find(subtitle =>
+                currentTime >= subtitle.start &&
+                currentTime <= subtitle.start + subtitle.duration
+            );
+
+            if (currentSubtitle) {
+                document.getElementById('original-subtitle').textContent = currentSubtitle.text;
+                
+                if (showTranslation) {
+                    try {
+                        const translatedText = await translateText(
+                            currentSubtitle.text,
+                            document.getElementById('source-language').value,
+                            document.getElementById('target-language').value
+                        );
+                        document.getElementById('translated-subtitle').textContent = translatedText;
+                    } catch (error) {
+                        console.error('Translation error:', error);
+                    }
+                }
+            } else {
+                document.getElementById('original-subtitle').textContent = '';
+                document.getElementById('translated-subtitle').textContent = '';
+            }
+        }
+
+        async function translateText(text, sourceLang, targetLang) {
+            // Giả lập dịch - trong thực tế bạn sẽ cần kết nối với API dịch
+            // Ví dụ sử dụng Google Cloud Translation API
+            return new Promise(resolve => {
+                setTimeout(() => {
+                    resolve(`[Bản dịch của: ${text}]`);
+                }, 100);
+            });
         }
 
         function extractVideoId(url) {
@@ -110,7 +254,22 @@
         }
 
         function onPlayerStateChange(event) {
-            // Có thể thêm xử lý khi trạng thái video thay đổi
+            // Xử lý khi trạng thái video thay đổi
+        }
+
+        function adjustTiming(offset) {
+            subtitleOffset += offset;
+        }
+
+        function toggleSubtitles() {
+            showSubtitles = !showSubtitles;
+        }
+
+        function toggleTranslation() {
+            showTranslation = !showTranslation;
+            if (!showTranslation) {
+                document.getElementById('translated-subtitle').textContent = '';
+            }
         }
     </script>
 </body>
